@@ -13,6 +13,7 @@ from sklearn.metrics import (classification_report, confusion_matrix,
                              precision_recall_curve)
 from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 
 from har_common import (ACTIVITES, LSTMHAR, charger, get_device, predire,
                         sauvegarder, telecharger)
@@ -60,11 +61,13 @@ critere = nn.CrossEntropyLoss()
 optim = torch.optim.Adam(modele.parameters(), lr=LR)
 
 
-def epoque(dl, entrainer):
+def epoque(dl, entrainer, ep):
     modele.train(entrainer)
     perte, bons, n = 0.0, 0, 0
     with torch.set_grad_enabled(entrainer):
-        for xb, yb in dl:
+        phase = "entraînement" if entrainer else "validation"
+        barre = tqdm(dl, desc=f"Époque {ep}/{EPOCHS} - {phase}", leave=False)
+        for xb, yb in barre:
             xb, yb = xb.to(device), yb.to(device)
             logits = modele(xb)
             loss = critere(logits, yb)
@@ -76,18 +79,24 @@ def epoque(dl, entrainer):
             perte += loss.item() * len(yb)
             bons += (logits.argmax(1) == yb).sum().item()
             n += len(yb)
+            barre.set_postfix(perte=f"{perte / n:.4f}",
+                              précision=f"{bons / n:.3f}")
     return perte / n, bons / n
 
 
 histo = {"loss": [], "val_loss": [], "acc": [], "val_acc": []}
 meilleure_val, sans_progres = float("inf"), 0
 
-for ep in range(1, EPOCHS + 1):
-    l, a = epoque(dl_train, True)
-    vl, va = epoque(dl_val, False)
+for ep in tqdm(range(1, EPOCHS + 1), desc="Progression des époques",
+               unit="époque"):
+    l, a = epoque(dl_train, True, ep)
+    vl, va = epoque(dl_val, False, ep)
     for k, v in zip(histo, (l, vl, a, va)):
         histo[k].append(v)
-    print(f"Epoque {ep:02d} | perte {l:.4f} acc {a:.3f} | val perte {vl:.4f} acc {va:.3f}")
+    tqdm.write(
+        f"Epoque {ep:02d} | perte {l:.4f} acc {a:.3f} "
+        f"| val perte {vl:.4f} acc {va:.3f}"
+    )
 
     if vl < meilleure_val:                      # on garde le meilleur modèle
         meilleure_val, sans_progres = vl, 0
@@ -95,7 +104,7 @@ for ep in range(1, EPOCHS + 1):
     else:
         sans_progres += 1
         if sans_progres >= PATIENCE:
-            print("Arrêt anticipé.")
+            tqdm.write("Arrêt anticipé.")
             break
 
 # On recharge le meilleur modèle sauvegardé pour l'évaluation finale
